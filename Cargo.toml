@@ -1,0 +1,3 @@
+[workspace]
+members = ["pgdumpcloud-core", "src-tauri"]
+resolver = "2"
