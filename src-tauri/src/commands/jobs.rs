@@ -216,13 +216,21 @@ async fn run_local_backup(
     });
 
     let dump_size = std::fs::metadata(&dump_path).map(|m| m.len()).ok();
-    let progress = ThrottledProgressSender::new(raw_progress, dump_size);
+    let progress = Arc::new(ThrottledProgressSender::new(raw_progress, dump_size));
 
     let upload_path = if request.compression.starts_with("gzip") {
         let level = compress::compression_level(
             request.compression.strip_prefix("gzip-").unwrap_or("default"),
         );
-        match compress::compress_gzip(&dump_path, level, &progress) {
+        let compress_dump = dump_path.clone();
+        let compress_progress = Arc::clone(&progress);
+        let compress_result = tokio::task::spawn_blocking(move || {
+            compress::compress_gzip(&compress_dump, level, compress_progress.as_ref())
+        })
+        .await
+        .unwrap_or_else(|e| Err(pgdumpcloud_core::error::PgDumpCloudError::Other(e.to_string())));
+
+        match compress_result {
             Ok(compressed) => {
                 let _ = std::fs::remove_file(&dump_path);
                 compressed
@@ -256,7 +264,7 @@ async fn run_local_backup(
         &request.storage_prefix,
     );
 
-    if let Err(e) = s3.upload(&upload_path, &remote_key, &progress).await {
+    if let Err(e) = s3.upload(&upload_path, &remote_key, progress.as_ref()).await {
         fail_job(&manager, &app, &job_id, e.to_string());
         return;
     }
@@ -268,7 +276,7 @@ async fn run_local_backup(
         return;
     }
 
-    extract_and_upload_types(&db_url, &schemas, &remote_key, &s3, &progress).await;
+    extract_and_upload_types(&db_url, &schemas, &remote_key, &s3, progress.as_ref()).await;
 
     if request.retention > 0 {
         if let Ok(entries) = s3.list("").await {
@@ -284,7 +292,7 @@ async fn run_local_backup(
         let _ = std::fs::remove_file(&upload_path);
     }
 
-    if !complete_job(&manager, &app, &job_id, remote_key.clone(), &progress) {
+    if !complete_job(&manager, &app, &job_id, remote_key.clone(), progress.as_ref()) {
         return;
     }
 }

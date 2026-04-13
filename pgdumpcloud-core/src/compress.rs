@@ -7,7 +7,7 @@ use std::fs::File;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
-const BUF_SIZE: usize = 64 * 1024;
+const BUF_SIZE: usize = 1024 * 1024;
 const ASYNC_BUF_SIZE: usize = 1024 * 1024; // 1 MB for streaming encoder
 
 pub fn compression_level(level: &str) -> Compression {
