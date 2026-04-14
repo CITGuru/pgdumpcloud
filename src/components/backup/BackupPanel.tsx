@@ -50,6 +50,11 @@ export function BackupPanel({
     noAcl: true,
     storageId: storageTargets[0]?.id ?? "",
     streaming: false,
+    parquetOptions: {
+      storage_mode: "archive",
+      max_rows_per_file: null,
+      hive_partitioning: { kind: "none" },
+    },
   });
 
   useEffect(() => {
@@ -107,6 +112,7 @@ export function BackupPanel({
       retention: options.retention,
       keep_local: options.keepLocal,
       streaming: options.streaming,
+      ...(options.format === "parquet" ? { parquet_options: options.parquetOptions } : {}),
     };
 
     setSubmitting(true);
@@ -205,6 +211,8 @@ export function BackupPanel({
             options={options}
             onChange={setOptions}
             storageTargets={storageTargets}
+            connectionUrl={activeUrl}
+            selectedTables={selectedTables}
           />
         </CardContent>
       </Card>

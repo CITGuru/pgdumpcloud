@@ -34,6 +34,7 @@ pub fn run() {
             commands::introspect::list_databases,
             commands::introspect::list_schemas,
             commands::introspect::list_tables,
+            commands::introspect::list_datetime_columns,
             commands::backup::run_backup,
             commands::backup::list_backups,
             commands::restore::run_restore,

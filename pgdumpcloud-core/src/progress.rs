@@ -11,6 +11,7 @@ pub enum Phase {
     Decompressing,
     Restoring,
     StreamingUpload,
+    Exporting,
 }
 
 impl std::fmt::Display for Phase {
@@ -23,6 +24,7 @@ impl std::fmt::Display for Phase {
             Phase::Decompressing => write!(f, "Decompressing"),
             Phase::Restoring => write!(f, "Restoring"),
             Phase::StreamingUpload => write!(f, "Streaming to cloud"),
+            Phase::Exporting => write!(f, "Exporting"),
         }
     }
 }
@@ -34,6 +36,7 @@ pub enum ProgressEvent {
     PhaseCompleted { phase: Phase },
     Error { message: String },
     Finished { message: String },
+    TableProgress { schema: String, table: String, index: usize, total_tables: usize },
 }
 
 pub trait ProgressSender: Send + Sync {
@@ -64,6 +67,9 @@ impl ProgressSender for CliProgressSender {
             }
             ProgressEvent::Finished { message } => {
                 eprintln!("[DONE] {message}");
+            }
+            ProgressEvent::TableProgress { schema, table, index, total_tables } => {
+                eprintln!("[INFO] Exporting table {}/{}: {schema}.{table}", index + 1, total_tables);
             }
         }
     }

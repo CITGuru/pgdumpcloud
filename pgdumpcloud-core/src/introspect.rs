@@ -22,7 +22,7 @@ pub struct TableInfo {
     pub size_pretty: String,
 }
 
-async fn connect(url: &str) -> Result<tokio_postgres::Client> {
+pub(crate) async fn connect(url: &str) -> Result<tokio_postgres::Client> {
     let (client, connection) = tokio_postgres::connect(url, tokio_postgres::NoTls)
         .await
         .map_err(|e| PgDumpCloudError::Connection(e.to_string()))?;
@@ -127,6 +127,36 @@ pub async fn extract_enum_types(database_url: &str, schemas: &[String]) -> Resul
     }
 
     Ok(sql)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ColumnInfo {
+    pub name: String,
+    pub data_type: String,
+}
+
+pub async fn list_datetime_columns(url: &str, schema: &str, table: &str) -> Result<Vec<ColumnInfo>> {
+    let client = connect(url).await?;
+
+    let rows = client
+        .query(
+            "SELECT column_name, udt_name \
+             FROM information_schema.columns \
+             WHERE table_schema = $1 AND table_name = $2 \
+               AND udt_name IN ('timestamp', 'timestamptz', 'date') \
+             ORDER BY ordinal_position",
+            &[&schema, &table],
+        )
+        .await
+        .map_err(|e| PgDumpCloudError::Connection(e.to_string()))?;
+
+    Ok(rows
+        .iter()
+        .map(|row| ColumnInfo {
+            name: row.get(0),
+            data_type: row.get(1),
+        })
+        .collect())
 }
 
 pub async fn list_tables(url: &str, schema: &str) -> Result<Vec<TableInfo>> {

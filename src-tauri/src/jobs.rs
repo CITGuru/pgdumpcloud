@@ -495,6 +495,9 @@ impl ProgressSender for JobProgressSender {
             ProgressEvent::PhaseCompleted { phase } => Some(format!("{phase} completed")),
             ProgressEvent::Error { message } => Some(format!("Error: {message}")),
             ProgressEvent::Finished { message } => Some(format!("Finished: {message}")),
+            ProgressEvent::TableProgress { schema, table, index, total_tables } => {
+                Some(format!("[Exporting] Table {}/{}: {schema}.{table}", index + 1, total_tables))
+            }
         };
         if let Some(msg) = &log_message {
             self.manager.append_log(&self.job_id, msg);

@@ -1,6 +1,6 @@
 use clap::{Parser, Subcommand, ValueEnum};
 use pgdumpcloud_core::{
-    compress, config, dump, introspect, progress, restore, storage,
+    compress, config, dump, introspect, parquet_export, progress, restore, storage,
 };
 use progress::ProgressSender;
 use std::path::PathBuf;
@@ -79,6 +79,18 @@ enum Commands {
 
         #[arg(long, help = "Stream pg_dump directly to S3 without local temp file (for large databases)")]
         streaming: bool,
+
+        #[arg(long, default_value = "archive", help = "Parquet storage mode (archive or individual)")]
+        storage_mode: StorageModeArg,
+
+        #[arg(long, help = "Max rows per parquet file")]
+        max_rows_per_file: Option<u64>,
+
+        #[arg(long, default_value = "none", help = "Hive partitioning strategy (none, year, year-month)")]
+        partition_by: PartitionByArg,
+
+        #[arg(long, help = "Column name for Hive partitioning (required when partition-by != none)")]
+        partition_column: Option<String>,
     },
 
     /// Restore a backup from cloud storage
@@ -160,11 +172,25 @@ enum Commands {
     },
 }
 
-#[derive(Clone, ValueEnum)]
+#[derive(Clone, ValueEnum, PartialEq)]
 enum FormatArg {
     Custom,
     Plain,
     Tar,
+    Parquet,
+}
+
+#[derive(Clone, ValueEnum)]
+enum StorageModeArg {
+    Archive,
+    Individual,
+}
+
+#[derive(Clone, ValueEnum)]
+enum PartitionByArg {
+    None,
+    Year,
+    YearMonth,
 }
 
 #[derive(Clone, ValueEnum)]
@@ -273,6 +299,10 @@ async fn main() {
             no_acl,
             output_dir,
             streaming,
+            storage_mode,
+            max_rows_per_file,
+            partition_by,
+            partition_column,
         } => {
             let db_url = resolve_db_url(&url, &conn, &cfg);
             let s3 = resolve_s3_storage(
@@ -280,10 +310,26 @@ async fn main() {
                 &region, &prefix, &cfg,
             );
 
+            if format == FormatArg::Parquet && streaming {
+                eprintln!("[ERROR] --streaming is incompatible with --format parquet");
+                process::exit(1);
+            }
+
+            if format == FormatArg::Parquet {
+                run_parquet_backup_cli(
+                    &db_url, schemas, tables, &filename_prefix,
+                    output_dir.unwrap_or_else(std::env::temp_dir),
+                    storage_mode, max_rows_per_file, partition_by, partition_column,
+                    keep_local, retention, s3, &progress_sender,
+                ).await;
+                return;
+            }
+
             let dump_format = match format {
                 FormatArg::Custom => dump::DumpFormat::Custom,
                 FormatArg::Plain => dump::DumpFormat::Plain,
                 FormatArg::Tar => dump::DumpFormat::Tar,
+                FormatArg::Parquet => unreachable!(),
             };
 
             let db_url_for_types = db_url.clone();
@@ -685,6 +731,126 @@ async fn run_streaming_backup(
     progress_sender.send(progress::ProgressEvent::Finished {
         message: format!("Backup streamed as {remote_key}"),
     });
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_parquet_backup_cli(
+    db_url: &str,
+    schemas: Vec<String>,
+    tables: Vec<String>,
+    filename_prefix: &str,
+    output_dir: PathBuf,
+    storage_mode: StorageModeArg,
+    max_rows_per_file: Option<u64>,
+    partition_by: PartitionByArg,
+    partition_column: Option<String>,
+    keep_local: bool,
+    retention: u32,
+    s3: storage::s3::S3Storage,
+    progress_sender: &dyn progress::ProgressSender,
+) {
+    let mode = match storage_mode {
+        StorageModeArg::Archive => parquet_export::StorageMode::Archive,
+        StorageModeArg::Individual => parquet_export::StorageMode::Individual,
+    };
+
+    let hive = match partition_by {
+        PartitionByArg::None => parquet_export::HivePartitioning::None,
+        PartitionByArg::Year => {
+            let col = partition_column.unwrap_or_else(|| {
+                eprintln!("[ERROR] --partition-column is required when --partition-by is year");
+                process::exit(1);
+            });
+            parquet_export::HivePartitioning::Year { column: col }
+        }
+        PartitionByArg::YearMonth => {
+            let col = partition_column.unwrap_or_else(|| {
+                eprintln!("[ERROR] --partition-column is required when --partition-by is year-month");
+                process::exit(1);
+            });
+            parquet_export::HivePartitioning::YearMonth { column: col }
+        }
+    };
+
+    let opts = parquet_export::ParquetExportOptions {
+        database_url: db_url.to_string(),
+        schemas,
+        tables,
+        output_dir,
+        filename_prefix: filename_prefix.to_string(),
+        max_rows_per_file,
+        hive_partitioning: hive,
+        storage_mode: mode,
+    };
+
+    let result = match parquet_export::run_parquet_export(&opts, progress_sender).await {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("[ERROR] Parquet export failed: {e}");
+            process::exit(1);
+        }
+    };
+
+    use storage::CloudStorage;
+    match result.mode {
+        parquet_export::StorageMode::Archive => {
+            if let Some(archive_path) = &result.archive_path {
+                let remote_key = archive_path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("export.tar.gz")
+                    .to_string();
+
+                if let Err(e) = s3.upload(archive_path, &remote_key, progress_sender).await {
+                    eprintln!("[ERROR] Upload failed: {e}");
+                    process::exit(1);
+                }
+
+                if !keep_local {
+                    let _ = std::fs::remove_file(archive_path);
+                }
+
+                progress_sender.send(progress::ProgressEvent::Finished {
+                    message: format!("Parquet export uploaded as {remote_key}"),
+                });
+            }
+        }
+        parquet_export::StorageMode::Individual => {
+            for file_path in &result.individual_files {
+                let relative = file_path
+                    .strip_prefix(&result.base_dir)
+                    .unwrap_or(file_path);
+                let remote_key = format!("{}/{}", result.db_name, relative.to_string_lossy());
+
+                if let Err(e) = s3.upload(file_path, &remote_key, progress_sender).await {
+                    eprintln!("[ERROR] Upload failed for {remote_key}: {e}");
+                    process::exit(1);
+                }
+            }
+
+            if !keep_local {
+                let _ = std::fs::remove_dir_all(&result.base_dir);
+            }
+
+            progress_sender.send(progress::ProgressEvent::Finished {
+                message: format!("{} parquet files uploaded", result.individual_files.len()),
+            });
+        }
+    }
+
+    if retention > 0 {
+        if let Ok(entries) = s3.list("").await {
+            if entries.len() > retention as usize {
+                for old in &entries[retention as usize..] {
+                    if let Err(e) = s3.delete(&old.key).await {
+                        eprintln!("[WARN] Failed to delete old backup {}: {e}", old.key);
+                    } else {
+                        eprintln!("[INFO] Deleted old backup: {}", old.key);
+                    }
+                }
+            }
+        }
+    }
 }
 
 fn format_size(bytes: i64) -> String {

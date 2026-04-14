@@ -33,6 +33,7 @@ const PHASE_LABELS: Record<string, string> = {
   Decompressing: "Decompressing",
   Restoring: "Restoring",
   StreamingUpload: "Streaming to cloud",
+  Exporting: "Exporting to Parquet",
 };
 
 function parseProgress(event: ProgressEvent | null) {
@@ -55,6 +56,17 @@ function parseProgress(event: ProgressEvent | null) {
       return { percent: 0, phase: label, detail, status: "running" as const, indeterminate: true };
     }
     return { percent: 0, phase: label, detail: `${formatBytes(bytes)} uploaded`, status: "running" as const, indeterminate: true };
+  }
+  if ("TableProgress" in event) {
+    const { schema, table, index, total_tables } = event.TableProgress;
+    const percent = total_tables > 0 ? Math.round(((index + 1) / total_tables) * 100) : 0;
+    return {
+      percent,
+      phase: "Exporting to Parquet",
+      detail: `Table ${index + 1}/${total_tables}: ${schema}.${table}`,
+      status: "running" as const,
+      indeterminate: false,
+    };
   }
   if ("PhaseCompleted" in event) {
     const label = PHASE_LABELS[event.PhaseCompleted.phase] ?? event.PhaseCompleted.phase;

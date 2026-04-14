@@ -3,7 +3,7 @@ use pgdumpcloud_core::dump::{self, DumpFormat, DumpOptions};
 use pgdumpcloud_core::progress::ProgressEvent;
 use pgdumpcloud_core::storage::s3::S3Storage;
 use pgdumpcloud_core::storage::{BackupEntry, CloudStorage};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tauri::{Emitter, Window};
 
 struct TauriProgressSender {
@@ -13,6 +13,40 @@ struct TauriProgressSender {
 impl pgdumpcloud_core::progress::ProgressSender for TauriProgressSender {
     fn send(&self, event: ProgressEvent) {
         let _ = self.window.emit("backup:progress", &event);
+    }
+}
+
+#[derive(Deserialize, Serialize, Clone)]
+#[serde(tag = "kind")]
+pub enum HivePartitioning {
+    #[serde(rename = "none")]
+    None,
+    #[serde(rename = "year")]
+    Year { column: String },
+    #[serde(rename = "year_month")]
+    YearMonth { column: String },
+}
+
+impl Default for HivePartitioning {
+    fn default() -> Self {
+        Self::None
+    }
+}
+
+#[derive(Deserialize, Serialize, Clone)]
+pub struct ParquetOptions {
+    pub storage_mode: String,
+    pub max_rows_per_file: Option<u64>,
+    pub hive_partitioning: HivePartitioning,
+}
+
+impl Default for ParquetOptions {
+    fn default() -> Self {
+        Self {
+            storage_mode: "archive".into(),
+            max_rows_per_file: None,
+            hive_partitioning: HivePartitioning::None,
+        }
     }
 }
 
@@ -37,6 +71,8 @@ pub struct BackupRequest {
     #[serde(default)]
     #[allow(dead_code)]
     pub streaming: bool,
+    #[serde(default)]
+    pub parquet_options: Option<ParquetOptions>,
 }
 
 #[tauri::command]

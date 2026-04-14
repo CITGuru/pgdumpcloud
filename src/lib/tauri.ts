@@ -7,6 +7,7 @@ import type {
   DatabaseInfo,
   SchemaInfo,
   TableInfo,
+  ColumnInfo,
   BackupEntry,
   BackupRequest,
   RestoreRequest,
@@ -86,6 +87,8 @@ export const api = {
     schemas: (url: string) => invoke<SchemaInfo[]>("list_schemas", { url }),
     tables: (url: string, schema: string) =>
       invoke<TableInfo[]>("list_tables", { url, schema }),
+    datetimeColumns: (url: string, schema: string, table: string) =>
+      invoke<ColumnInfo[]>("list_datetime_columns", { url, schema, table }),
   },
 
   backup: {

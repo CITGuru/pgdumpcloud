@@ -4,6 +4,7 @@ pub mod compress;
 pub mod dump;
 pub mod error;
 pub mod introspect;
+pub mod parquet_export;
 pub mod progress;
 pub mod restore;
 pub mod storage;

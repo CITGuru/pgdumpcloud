@@ -60,6 +60,25 @@ export interface BackupEntry {
   last_modified: string | null;
 }
 
+export interface ColumnInfo {
+  name: string;
+  data_type: string;
+}
+
+export type ParquetStorageMode = "archive" | "individual";
+export type HivePartitionKind = "none" | "year" | "year_month";
+
+export interface HivePartitioning {
+  kind: HivePartitionKind;
+  column?: string;
+}
+
+export interface ParquetOptions {
+  storage_mode: ParquetStorageMode;
+  max_rows_per_file: number | null;
+  hive_partitioning: HivePartitioning;
+}
+
 export type Phase =
   | "Dumping"
   | "Compressing"
@@ -67,14 +86,16 @@ export type Phase =
   | "Downloading"
   | "Decompressing"
   | "Restoring"
-  | "StreamingUpload";
+  | "StreamingUpload"
+  | "Exporting";
 
 export type ProgressEvent =
   | { PhaseStarted: { phase: Phase } }
   | { Progress: { phase: Phase; bytes: number; total: number | null } }
   | { PhaseCompleted: { phase: Phase } }
   | { Error: { message: string } }
-  | { Finished: { message: string } };
+  | { Finished: { message: string } }
+  | { TableProgress: { schema: string; table: string; index: number; total_tables: number } };
 
 export interface BackupRequest {
   connection_url: string;
@@ -94,6 +115,7 @@ export interface BackupRequest {
   retention: number;
   keep_local: boolean;
   streaming: boolean;
+  parquet_options?: ParquetOptions;
 }
 
 export interface RestoreRequest {

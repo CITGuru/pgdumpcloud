@@ -3,6 +3,7 @@ use std::sync::Arc;
 use pgdumpcloud_core::compress;
 use pgdumpcloud_core::dump::{self, DumpFormat, DumpOptions};
 use pgdumpcloud_core::introspect;
+use pgdumpcloud_core::parquet_export::{self, ParquetExportOptions, StorageMode, HivePartitioning as CoreHivePartitioning};
 use pgdumpcloud_core::progress::{Phase, ProgressEvent, ProgressSender, ThrottledProgressSender};
 use pgdumpcloud_core::restore::{self, RestoreOptions};
 use pgdumpcloud_core::storage::s3::S3Storage;
@@ -11,6 +12,7 @@ use serde::Deserialize;
 use tauri::{AppHandle, Emitter, State};
 use tokio_util::sync::CancellationToken;
 
+use super::backup::ParquetOptions;
 use crate::jobs::{
     Job, JobKind, JobManager, JobProgressSender, JobStatus, JobStatusEvent, JobSummary, LogEntry,
 };
@@ -35,6 +37,8 @@ pub struct BackupJobRequest {
     pub keep_local: bool,
     #[serde(default)]
     pub streaming: bool,
+    #[serde(default)]
+    pub parquet_options: Option<ParquetOptions>,
 }
 
 #[derive(Deserialize, serde::Serialize)]
@@ -90,7 +94,9 @@ async fn run_backup_task(
         },
     );
 
-    if request.streaming {
+    if request.format == "parquet" {
+        run_parquet_backup(job_id.clone(), request, manager.clone(), app.clone(), cancel).await;
+    } else if request.streaming {
         run_streaming_backup(job_id.clone(), request, manager.clone(), app.clone(), cancel).await;
     } else {
         run_local_backup(job_id.clone(), request, manager.clone(), app.clone(), cancel).await;
@@ -295,6 +301,136 @@ async fn run_local_backup(
     if !complete_job(&manager, &app, &job_id, remote_key.clone(), progress.as_ref()) {
         return;
     }
+}
+
+async fn run_parquet_backup(
+    job_id: String,
+    request: BackupJobRequest,
+    manager: Arc<JobManager>,
+    app: AppHandle,
+    cancel: CancellationToken,
+) {
+    let raw_progress = JobProgressSender {
+        job_id: job_id.clone(),
+        app_handle: app.clone(),
+        manager: Arc::clone(&manager),
+    };
+    let progress = Arc::new(ThrottledProgressSender::new(raw_progress, None));
+
+    let parquet_opts = request.parquet_options.unwrap_or_default();
+
+    let storage_mode = match parquet_opts.storage_mode.as_str() {
+        "individual" => StorageMode::Individual,
+        _ => StorageMode::Archive,
+    };
+
+    let hive = match parquet_opts.hive_partitioning {
+        super::backup::HivePartitioning::Year { column } => CoreHivePartitioning::Year { column },
+        super::backup::HivePartitioning::YearMonth { column } => CoreHivePartitioning::YearMonth { column },
+        super::backup::HivePartitioning::None => CoreHivePartitioning::None,
+    };
+
+    let export_opts = ParquetExportOptions {
+        database_url: request.connection_url,
+        schemas: request.schemas,
+        tables: request.tables,
+        output_dir: std::env::temp_dir(),
+        filename_prefix: request.filename_prefix,
+        max_rows_per_file: parquet_opts.max_rows_per_file,
+        hive_partitioning: hive,
+        storage_mode,
+    };
+
+    if cancel.is_cancelled() { return; }
+
+    let result = match parquet_export::run_parquet_export(&export_opts, progress.as_ref()).await {
+        Ok(r) => r,
+        Err(e) => {
+            fail_job(&manager, &app, &job_id, e.to_string());
+            return;
+        }
+    };
+
+    if cancel.is_cancelled() { return; }
+
+    let s3 = S3Storage::new(
+        &request.storage_endpoint,
+        &request.storage_bucket,
+        &request.storage_region,
+        &request.storage_access_key,
+        &request.storage_secret_key,
+        &request.storage_prefix,
+    );
+
+    let remote_key = match result.mode {
+        StorageMode::Archive => {
+            let archive_path = match &result.archive_path {
+                Some(p) => p,
+                None => {
+                    fail_job(&manager, &app, &job_id, "No archive file produced".into());
+                    return;
+                }
+            };
+
+            let remote_key = archive_path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("export.tar.gz")
+                .to_string();
+
+            if let Err(e) = s3.upload(archive_path, &remote_key, progress.as_ref()).await {
+                fail_job(&manager, &app, &job_id, e.to_string());
+                return;
+            }
+
+            if !request.keep_local {
+                let _ = std::fs::remove_file(archive_path);
+            }
+
+            remote_key
+        }
+        StorageMode::Individual => {
+            let mut last_key = String::new();
+            for file_path in &result.individual_files {
+                if cancel.is_cancelled() { return; }
+
+                let relative = file_path
+                    .strip_prefix(&result.base_dir)
+                    .unwrap_or(file_path);
+                let remote_key = format!("{}/{}", result.db_name, relative.to_string_lossy());
+
+                if let Err(e) = s3.upload(file_path, &remote_key, progress.as_ref()).await {
+                    fail_job(&manager, &app, &job_id, e.to_string());
+                    return;
+                }
+                last_key = remote_key;
+            }
+
+            if !request.keep_local {
+                let _ = std::fs::remove_dir_all(&result.base_dir);
+            }
+
+            if result.individual_files.len() == 1 {
+                last_key
+            } else {
+                format!("{} files uploaded", result.individual_files.len())
+            }
+        }
+    };
+
+    if cancel.is_cancelled() { return; }
+
+    if request.retention > 0 {
+        if let Ok(entries) = s3.list("").await {
+            if entries.len() > request.retention as usize {
+                for old in &entries[request.retention as usize..] {
+                    let _ = s3.delete(&old.key).await;
+                }
+            }
+        }
+    }
+
+    complete_job(&manager, &app, &job_id, remote_key, progress.as_ref());
 }
 
 /// Streams pg_dump stdout -> optional gzip -> S3 multipart upload.

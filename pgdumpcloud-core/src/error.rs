@@ -26,6 +26,9 @@ pub enum PgDumpCloudError {
     #[error("Compression error: {0}")]
     Compression(String),
 
+    #[error("Parquet export error: {0}")]
+    ParquetExport(String),
+
     #[error("{0}")]
     Other(String),
 }
