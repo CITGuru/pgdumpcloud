@@ -2,6 +2,8 @@
 
 A desktop app and CLI for backing up and restoring PostgreSQL databases directly to S3-compatible cloud storage. Built with Tauri, React, and Rust.
 
+![PGDumpCloud](./assets/pgdumpcloud.png)
+
 ## Features
 
 - **Streaming backups** — pipe `pg_dump` output straight to S3 without consuming local disk space, critical for large databases (100GB+)
@@ -13,6 +15,7 @@ A desktop app and CLI for backing up and restoring PostgreSQL databases directly
 - **Job management** — run multiple backup/restore jobs concurrently, monitor progress, cancel, retry
 - **Connection & storage management** — save and reuse PostgreSQL connections and S3 storage targets
 - **CLI** — headless operation for scripting and cron jobs
+
 
 ## Getting Started
 
