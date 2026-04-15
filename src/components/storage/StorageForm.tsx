@@ -98,7 +98,7 @@ export function StorageForm({
           <div className="space-y-2">
             <Label>Name</Label>
             <Input
-              placeholder="My R2 Bucket"
+              placeholder="My S3 Bucket"
               value={name}
               onChange={(e) => setName(e.target.value)}
             />
@@ -120,7 +120,7 @@ export function StorageForm({
           <div className="space-y-2">
             <Label>Endpoint URL</Label>
             <Input
-              placeholder="https://account.r2.cloudflarestorage.com"
+              placeholder="https://s3.us-east-1.amazonaws.com"
               value={endpoint}
               onChange={(e) => setEndpoint(e.target.value)}
               className="font-mono text-sm"

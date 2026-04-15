@@ -263,16 +263,16 @@ fn resolve_s3_storage(
     }
 
     let ep = endpoint.clone()
-        .or_else(|| std::env::var("R2_ENDPOINT").ok())
+        .or_else(|| std::env::var("S3_ENDPOINT").ok())
         .unwrap_or_else(|| { eprintln!("No storage endpoint. Use --endpoint or --storage"); process::exit(1); });
     let bk = bucket.clone()
-        .or_else(|| std::env::var("R2_BUCKET_NAME").ok())
+        .or_else(|| std::env::var("S3_BUCKET").ok())
         .unwrap_or_else(|| { eprintln!("No bucket name. Use --bucket or --storage"); process::exit(1); });
     let ak = access_key.clone()
-        .or_else(|| std::env::var("R2_ACCESS_KEY").ok())
+        .or_else(|| std::env::var("S3_ACCESS_KEY").ok())
         .unwrap_or_else(|| { eprintln!("No access key. Use --access-key or --storage"); process::exit(1); });
     let sk = secret_key.clone()
-        .or_else(|| std::env::var("R2_SECRET_KEY").ok())
+        .or_else(|| std::env::var("S3_SECRET_KEY").ok())
         .unwrap_or_else(|| { eprintln!("No secret key. Use --secret-key or --storage"); process::exit(1); });
 
     storage::s3::S3Storage::new(&ep, &bk, region, &ak, &sk, prefix)

@@ -76,10 +76,10 @@ The CLI accepts `--config <path>` to use an alternate config file.
 | Variable | Purpose |
 |----------|---------|
 | `DATABASE_URL` | Fallback PostgreSQL connection string |
-| `R2_ENDPOINT` | Fallback S3 endpoint |
-| `R2_BUCKET_NAME` | Fallback S3 bucket |
-| `R2_ACCESS_KEY` | Fallback S3 access key |
-| `R2_SECRET_KEY` | Fallback S3 secret key |
+| `S3_ENDPOINT` | Fallback S3 endpoint |
+| `S3_BUCKET` | Fallback S3 bucket |
+| `S3_ACCESS_KEY` | Fallback S3 access key |
+| `S3_SECRET_KEY` | Fallback S3 secret key |
 
 ## License
 
