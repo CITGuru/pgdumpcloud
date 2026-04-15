@@ -7,7 +7,11 @@ use std::path::PathBuf;
 use std::process;
 
 #[derive(Parser)]
-#[command(name = "pgdumpcloud", version, about = "PostgreSQL backup/restore to S3-compatible cloud storage")]
+#[command(
+    name = "pgdumpcloud",
+    version,
+    about = "PostgreSQL backup/restore to S3-compatible cloud storage"
+)]
 struct Cli {
     #[arg(long, global = true, help = "Path to config file")]
     config: Option<PathBuf>,
@@ -26,7 +30,11 @@ enum Commands {
         #[arg(long, help = "Saved connection name or ID")]
         connection: Option<String>,
 
-        #[arg(long, value_delimiter = ',', help = "Tables to include (schema.table,...)")]
+        #[arg(
+            long,
+            value_delimiter = ',',
+            help = "Tables to include (schema.table,...)"
+        )]
         tables: Vec<String>,
 
         #[arg(long, value_delimiter = ',', help = "Schemas to include")]
@@ -77,22 +85,40 @@ enum Commands {
         #[arg(long, help = "Output directory for local dump")]
         output_dir: Option<PathBuf>,
 
-        #[arg(long, help = "Stream pg_dump directly to S3 without local temp file (for large databases)")]
+        #[arg(
+            long,
+            help = "Stream pg_dump directly to S3 without local temp file (for large databases)"
+        )]
         streaming: bool,
 
-        #[arg(long, default_value = "archive", help = "Parquet storage mode (archive or individual)")]
+        #[arg(
+            long,
+            default_value = "archive",
+            help = "Parquet storage mode (archive or individual)"
+        )]
         storage_mode: StorageModeArg,
 
         #[arg(long, help = "Max rows per parquet file")]
         max_rows_per_file: Option<u64>,
 
-        #[arg(long, default_value = "none", help = "Hive partitioning strategy (none, year, year-month)")]
+        #[arg(
+            long,
+            default_value = "none",
+            help = "Hive partitioning strategy (none, year, year-month)"
+        )]
         partition_by: PartitionByArg,
 
-        #[arg(long, help = "Column name for Hive partitioning (required when partition-by != none)")]
+        #[arg(
+            long,
+            help = "Column name for Hive partitioning (required when partition-by != none)"
+        )]
         partition_column: Option<String>,
 
-        #[arg(long, default_value = "cursor", help = "Fetch strategy for flat export (cursor or copy)")]
+        #[arg(
+            long,
+            default_value = "cursor",
+            help = "Fetch strategy for flat export (cursor or copy)"
+        )]
         fetch_strategy: FetchStrategyArg,
     },
 
@@ -262,18 +288,34 @@ fn resolve_s3_storage(
         process::exit(1);
     }
 
-    let ep = endpoint.clone()
+    let ep = endpoint
+        .clone()
         .or_else(|| std::env::var("S3_ENDPOINT").ok())
-        .unwrap_or_else(|| { eprintln!("No storage endpoint. Use --endpoint or --storage"); process::exit(1); });
-    let bk = bucket.clone()
+        .unwrap_or_else(|| {
+            eprintln!("No storage endpoint. Use --endpoint or --storage");
+            process::exit(1);
+        });
+    let bk = bucket
+        .clone()
         .or_else(|| std::env::var("S3_BUCKET").ok())
-        .unwrap_or_else(|| { eprintln!("No bucket name. Use --bucket or --storage"); process::exit(1); });
-    let ak = access_key.clone()
+        .unwrap_or_else(|| {
+            eprintln!("No bucket name. Use --bucket or --storage");
+            process::exit(1);
+        });
+    let ak = access_key
+        .clone()
         .or_else(|| std::env::var("S3_ACCESS_KEY").ok())
-        .unwrap_or_else(|| { eprintln!("No access key. Use --access-key or --storage"); process::exit(1); });
-    let sk = secret_key.clone()
+        .unwrap_or_else(|| {
+            eprintln!("No access key. Use --access-key or --storage");
+            process::exit(1);
+        });
+    let sk = secret_key
+        .clone()
         .or_else(|| std::env::var("S3_SECRET_KEY").ok())
-        .unwrap_or_else(|| { eprintln!("No secret key. Use --secret-key or --storage"); process::exit(1); });
+        .unwrap_or_else(|| {
+            eprintln!("No secret key. Use --secret-key or --storage");
+            process::exit(1);
+        });
 
     storage::s3::S3Storage::new(&ep, &bk, region, &ak, &sk, prefix)
 }
@@ -316,8 +358,14 @@ async fn main() {
         } => {
             let db_url = resolve_db_url(&url, &conn, &cfg);
             let s3 = resolve_s3_storage(
-                &storage_name, &endpoint, &bucket, &access_key, &secret_key,
-                &region, &prefix, &cfg,
+                &storage_name,
+                &endpoint,
+                &bucket,
+                &access_key,
+                &secret_key,
+                &region,
+                &prefix,
+                &cfg,
             );
 
             if format == FormatArg::Parquet && streaming {
@@ -327,12 +375,22 @@ async fn main() {
 
             if format == FormatArg::Parquet {
                 run_parquet_backup_cli(
-                    &db_url, schemas, tables, &filename_prefix,
+                    &db_url,
+                    schemas,
+                    tables,
+                    &filename_prefix,
                     output_dir.unwrap_or_else(std::env::temp_dir),
-                    storage_mode, max_rows_per_file, partition_by, partition_column,
+                    storage_mode,
+                    max_rows_per_file,
+                    partition_by,
+                    partition_column,
                     fetch_strategy,
-                    keep_local, retention, s3, &progress_sender,
-                ).await;
+                    keep_local,
+                    retention,
+                    s3,
+                    &progress_sender,
+                )
+                .await;
                 return;
             }
 
@@ -359,7 +417,15 @@ async fn main() {
             };
 
             if streaming {
-                run_streaming_backup(opts, compression, s3, retention, &filename_prefix, &progress_sender).await;
+                run_streaming_backup(
+                    opts,
+                    compression,
+                    s3,
+                    retention,
+                    &filename_prefix,
+                    &progress_sender,
+                )
+                .await;
             } else {
                 let dump_path = match dump::run_dump(&opts, &progress_sender) {
                     Ok(p) => p,
@@ -371,7 +437,11 @@ async fn main() {
 
                 let upload_path = match compression {
                     CompressionArg::Gzip => {
-                        match compress::compress_gzip(&dump_path, flate2::Compression::default(), &progress_sender) {
+                        match compress::compress_gzip(
+                            &dump_path,
+                            flate2::Compression::default(),
+                            &progress_sender,
+                        ) {
                             Ok(p) => {
                                 let _ = std::fs::remove_file(&dump_path);
                                 p
@@ -398,8 +468,13 @@ async fn main() {
                 }
 
                 extract_and_upload_types_cli(
-                    &db_url_for_types, &schemas_for_types, &remote_key, &s3, &progress_sender,
-                ).await;
+                    &db_url_for_types,
+                    &schemas_for_types,
+                    &remote_key,
+                    &s3,
+                    &progress_sender,
+                )
+                .await;
 
                 progress_sender.send(progress::ProgressEvent::Finished {
                     message: format!("Backup uploaded as {remote_key}"),
@@ -410,7 +485,10 @@ async fn main() {
                         if entries.len() > retention as usize {
                             for old in &entries[retention as usize..] {
                                 if let Err(e) = s3.delete(&old.key).await {
-                                    eprintln!("[WARN] Failed to delete old backup {}: {e}", old.key);
+                                    eprintln!(
+                                        "[WARN] Failed to delete old backup {}: {e}",
+                                        old.key
+                                    );
                                 } else {
                                     eprintln!("[INFO] Deleted old backup: {}", old.key);
                                 }
@@ -440,8 +518,14 @@ async fn main() {
             data_only,
         } => {
             let s3 = resolve_s3_storage(
-                &storage_name, &endpoint, &bucket, &access_key, &secret_key,
-                &region, "", &cfg,
+                &storage_name,
+                &endpoint,
+                &bucket,
+                &access_key,
+                &secret_key,
+                &region,
+                "",
+                &cfg,
             );
 
             let local_path = std::env::temp_dir().join(&backup);
@@ -470,7 +554,11 @@ async fn main() {
             // Try to download and apply the companion .types.sql (best-effort)
             let types_key = dump::types_sql_key(&backup);
             let types_local = std::env::temp_dir().join(&types_key);
-            if s3.download(&types_key, &types_local, &progress_sender).await.is_ok() {
+            if s3
+                .download(&types_key, &types_local, &progress_sender)
+                .await
+                .is_ok()
+            {
                 match restore::apply_types_sql(&types_local, &target_url) {
                     Ok(()) => eprintln!("[INFO] Applied types file: {types_key}"),
                     Err(e) => eprintln!("[WARN] Types SQL warning: {e}"),
@@ -553,8 +641,14 @@ async fn main() {
             prefix,
         } => {
             let s3 = resolve_s3_storage(
-                &storage_name, &endpoint, &bucket, &access_key, &secret_key,
-                &region, &prefix, &cfg,
+                &storage_name,
+                &endpoint,
+                &bucket,
+                &access_key,
+                &secret_key,
+                &region,
+                &prefix,
+                &cfg,
             );
 
             use storage::CloudStorage;
@@ -615,31 +709,61 @@ async fn extract_and_upload_types_cli(
     let _ = std::fs::remove_file(&types_path);
 }
 
+fn pg_install_hint() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "  Install: brew install postgresql"
+    } else if cfg!(target_os = "linux") {
+        "  Install: sudo apt install postgresql-client   # Debian/Ubuntu\n           sudo dnf install postgresql              # Fedora/RHEL"
+    } else if cfg!(target_os = "windows") {
+        "  Install: choco install postgresql\n           or download from https://www.postgresql.org/download/windows/"
+    } else {
+        "  Install: https://www.postgresql.org/download/"
+    }
+}
+
 fn cmd_doctor() {
     println!("pgdumpcloud doctor\n");
 
+    let mut missing = false;
+
     match dump::check_pg_dump() {
         Ok(v) => println!("[OK] {v}"),
-        Err(_) => println!("[FAIL] pg_dump not found in PATH"),
+        Err(_) => {
+            println!("[FAIL] pg_dump not found in PATH");
+            missing = true;
+        }
     }
 
     match restore::check_pg_restore() {
         Ok(v) => println!("[OK] {v}"),
-        Err(_) => println!("[FAIL] pg_restore not found in PATH"),
+        Err(_) => {
+            println!("[FAIL] pg_restore not found in PATH");
+            missing = true;
+        }
     }
 
     match restore::check_psql() {
         Ok(v) => println!("[OK] {v}"),
-        Err(_) => println!("[FAIL] psql not found in PATH"),
+        Err(_) => {
+            println!("[FAIL] psql not found in PATH");
+            missing = true;
+        }
     }
 
-    match std::process::Command::new("rclone").arg("--version").output() {
+    match std::process::Command::new("rclone")
+        .arg("--version")
+        .output()
+    {
         Ok(o) if o.status.success() => {
             let v = String::from_utf8_lossy(&o.stdout);
             let first_line = v.lines().next().unwrap_or("rclone");
             println!("[OK] {first_line}");
         }
         _ => println!("[INFO] rclone not found (optional)"),
+    }
+
+    if missing {
+        println!("\n{}", pg_install_hint());
     }
 
     println!("\nDoctor check complete.");
@@ -674,19 +798,21 @@ async fn run_streaming_backup(
         process::exit(1);
     });
 
-    let mut async_stdout = tokio::process::ChildStdout::from_std(stdout)
-        .unwrap_or_else(|e| {
-            eprintln!("[ERROR] Failed to convert stdout: {e}");
-            process::exit(1);
-        });
+    let mut async_stdout = tokio::process::ChildStdout::from_std(stdout).unwrap_or_else(|e| {
+        eprintln!("[ERROR] Failed to convert stdout: {e}");
+        process::exit(1);
+    });
 
     let upload_result = match compression {
         CompressionArg::Gzip => {
-            let mut gz = compress::AsyncGzipEncoder::new(async_stdout, flate2::Compression::default());
-            s3.upload_stream(&mut gz, &remote_key, progress_sender, None, None).await
+            let mut gz =
+                compress::AsyncGzipEncoder::new(async_stdout, flate2::Compression::default());
+            s3.upload_stream(&mut gz, &remote_key, progress_sender, None, None)
+                .await
         }
         CompressionArg::None => {
-            s3.upload_stream(&mut async_stdout, &remote_key, progress_sender, None, None).await
+            s3.upload_stream(&mut async_stdout, &remote_key, progress_sender, None, None)
+                .await
         }
     };
 
@@ -721,8 +847,13 @@ async fn run_streaming_backup(
     });
 
     extract_and_upload_types_cli(
-        &opts.database_url, &opts.schemas, &remote_key, &s3, progress_sender,
-    ).await;
+        &opts.database_url,
+        &opts.schemas,
+        &remote_key,
+        &s3,
+        progress_sender,
+    )
+    .await;
 
     if retention > 0 {
         use storage::CloudStorage;
@@ -782,7 +913,9 @@ async fn run_parquet_backup_cli(
         }
         PartitionByArg::YearMonth => {
             let col = partition_column.unwrap_or_else(|| {
-                eprintln!("[ERROR] --partition-column is required when --partition-by is year-month");
+                eprintln!(
+                    "[ERROR] --partition-column is required when --partition-by is year-month"
+                );
                 process::exit(1);
             });
             parquet_export::HivePartitioning::YearMonth { column: col }

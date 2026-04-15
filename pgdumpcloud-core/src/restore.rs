@@ -30,9 +30,7 @@ impl Default for RestoreOptions {
 pub fn check_pg_restore() -> Result<String> {
     let output = Command::new("pg_restore").arg("--version").output();
     match output {
-        Ok(o) if o.status.success() => {
-            Ok(String::from_utf8_lossy(&o.stdout).trim().to_string())
-        }
+        Ok(o) if o.status.success() => Ok(String::from_utf8_lossy(&o.stdout).trim().to_string()),
         _ => Err(PgDumpCloudError::BinaryNotFound("pg_restore".into())),
     }
 }
@@ -40,9 +38,7 @@ pub fn check_pg_restore() -> Result<String> {
 pub fn check_psql() -> Result<String> {
     let output = Command::new("psql").arg("--version").output();
     match output {
-        Ok(o) if o.status.success() => {
-            Ok(String::from_utf8_lossy(&o.stdout).trim().to_string())
-        }
+        Ok(o) if o.status.success() => Ok(String::from_utf8_lossy(&o.stdout).trim().to_string()),
         _ => Err(PgDumpCloudError::BinaryNotFound("psql".into())),
     }
 }
@@ -62,19 +58,16 @@ pub fn apply_types_sql(types_path: &Path, database_url: &str) -> Result<()> {
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(PgDumpCloudError::Restore(
-            format!("Types SQL apply failed: {stderr}"),
-        ));
+        return Err(PgDumpCloudError::Restore(format!(
+            "Types SQL apply failed: {stderr}"
+        )));
     }
 
     Ok(())
 }
 
 fn is_plain_sql(path: &Path) -> bool {
-    let name = path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("");
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
     name.ends_with(".sql")
 }
 
@@ -111,7 +104,11 @@ pub fn run_restore(
     result
 }
 
-fn run_pg_restore(backup_path: &Path, options: &RestoreOptions, progress: &dyn ProgressSender) -> Result<()> {
+fn run_pg_restore(
+    backup_path: &Path,
+    options: &RestoreOptions,
+    progress: &dyn ProgressSender,
+) -> Result<()> {
     let mut cmd = Command::new("pg_restore");
     cmd.arg(format!("--dbname={}", options.database_url));
 

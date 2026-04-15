@@ -395,9 +395,9 @@ const MAX_CONCURRENT_PARTS: usize = 8;
 /// to keep memory usage reasonable (MAX_CONCURRENT_PARTS * part_size in RAM).
 fn choose_part_size(estimated_total: Option<u64>) -> usize {
     match estimated_total {
-        Some(t) if t > 5 * 1024 * 1024 * 1024 => 50 * 1024 * 1024,  // >5 GB → 50 MB parts
-        Some(t) if t > 1024 * 1024 * 1024 => 25 * 1024 * 1024,      // >1 GB → 25 MB parts
-        _ => MIN_PART_SIZE,                                           // else  → 10 MB parts
+        Some(t) if t > 5 * 1024 * 1024 * 1024 => 50 * 1024 * 1024, // >5 GB → 50 MB parts
+        Some(t) if t > 1024 * 1024 * 1024 => 25 * 1024 * 1024,     // >1 GB → 25 MB parts
+        _ => MIN_PART_SIZE,                                        // else  → 10 MB parts
     }
 }
 
@@ -481,7 +481,9 @@ impl S3Storage {
                 }
             }
 
-            if failed { break; }
+            if failed {
+                break;
+            }
 
             // Fill a part-sized buffer from the reader
             let mut buf = vec![0u8; part_size];
@@ -596,12 +598,16 @@ impl S3Storage {
 
         if failed || (cancel.is_some() && cancel.unwrap().is_cancelled()) {
             self.abort_upload(&key, &upload_id).await;
-            return Err(PgDumpCloudError::Storage("Upload cancelled or failed".into()));
+            return Err(PgDumpCloudError::Storage(
+                "Upload cancelled or failed".into(),
+            ));
         }
 
         if completed_parts.is_empty() {
             self.abort_upload(&key, &upload_id).await;
-            return Err(PgDumpCloudError::Storage("No data was read from source".into()));
+            return Err(PgDumpCloudError::Storage(
+                "No data was read from source".into(),
+            ));
         }
 
         completed_parts.sort_by_key(|(pn, _)| *pn);

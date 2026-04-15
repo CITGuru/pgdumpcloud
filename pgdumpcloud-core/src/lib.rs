@@ -1,6 +1,6 @@
+pub mod compress;
 pub mod config;
 pub mod connection;
-pub mod compress;
 pub mod dump;
 pub mod error;
 pub mod introspect;

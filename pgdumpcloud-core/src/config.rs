@@ -62,10 +62,7 @@ impl ConnectionConfig {
         let password_part = if self.password.is_empty() {
             String::new()
         } else {
-            format!(
-                ":{}",
-                urlencoding::encode(&self.password)
-            )
+            format!(":{}", urlencoding::encode(&self.password))
         };
 
         let user_part = if self.username.is_empty() {
@@ -74,8 +71,16 @@ impl ConnectionConfig {
             format!("{}{password_part}@", urlencoding::encode(&self.username))
         };
 
-        let host = if self.host.is_empty() { "localhost" } else { &self.host };
-        let db = if self.database.is_empty() { "postgres" } else { &self.database };
+        let host = if self.host.is_empty() {
+            "localhost"
+        } else {
+            &self.host
+        };
+        let db = if self.database.is_empty() {
+            "postgres"
+        } else {
+            &self.database
+        };
 
         format!("postgres://{user_part}{host}:{}/{db}", self.port)
     }
@@ -84,10 +89,7 @@ impl ConnectionConfig {
         let password_part = if self.password.is_empty() {
             String::new()
         } else {
-            format!(
-                ":{}",
-                urlencoding::encode(&self.password)
-            )
+            format!(":{}", urlencoding::encode(&self.password))
         };
 
         let user_part = if self.username.is_empty() {
@@ -96,7 +98,11 @@ impl ConnectionConfig {
             format!("{}{password_part}@", urlencoding::encode(&self.username))
         };
 
-        let host = if self.host.is_empty() { "localhost" } else { &self.host };
+        let host = if self.host.is_empty() {
+            "localhost"
+        } else {
+            &self.host
+        };
 
         format!("postgres://{user_part}{host}:{}/{db_name}", self.port)
     }

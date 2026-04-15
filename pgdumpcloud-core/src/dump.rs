@@ -79,9 +79,7 @@ impl Default for DumpOptions {
 pub fn check_pg_dump() -> Result<String> {
     let output = Command::new("pg_dump").arg("--version").output();
     match output {
-        Ok(o) if o.status.success() => {
-            Ok(String::from_utf8_lossy(&o.stdout).trim().to_string())
-        }
+        Ok(o) if o.status.success() => Ok(String::from_utf8_lossy(&o.stdout).trim().to_string()),
         _ => Err(PgDumpCloudError::BinaryNotFound("pg_dump".into())),
     }
 }
@@ -100,7 +98,10 @@ fn quote_pg_identifier(name: &str) -> String {
 
 pub fn generate_filename(prefix: &str, db_name: &str, format: &DumpFormat) -> String {
     let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
-    format!("{prefix}_{db_name}_{timestamp}.{ext}", ext = format.extension())
+    format!(
+        "{prefix}_{db_name}_{timestamp}.{ext}",
+        ext = format.extension()
+    )
 }
 
 /// Derives the companion `.types.sql` path from a dump path or remote key.
@@ -110,7 +111,8 @@ pub fn generate_filename(prefix: &str, db_name: &str, format: &DumpFormat) -> St
 pub fn types_sql_path(dump_path: &Path) -> PathBuf {
     let stem = dump_path.to_string_lossy();
     let s = stem.strip_suffix(".gz").unwrap_or(&stem);
-    let s = s.strip_suffix(".dump")
+    let s = s
+        .strip_suffix(".dump")
         .or_else(|| s.strip_suffix(".sql"))
         .or_else(|| s.strip_suffix(".tar"))
         .unwrap_or(s);
@@ -120,7 +122,8 @@ pub fn types_sql_path(dump_path: &Path) -> PathBuf {
 /// Same as `types_sql_path` but operates on a remote key string.
 pub fn types_sql_key(remote_key: &str) -> String {
     let s = remote_key.strip_suffix(".gz").unwrap_or(remote_key);
-    let s = s.strip_suffix(".dump")
+    let s = s
+        .strip_suffix(".dump")
         .or_else(|| s.strip_suffix(".sql"))
         .or_else(|| s.strip_suffix(".tar"))
         .unwrap_or(s);
@@ -130,8 +133,8 @@ pub fn types_sql_key(remote_key: &str) -> String {
 pub fn run_dump(options: &DumpOptions, progress: &dyn ProgressSender) -> Result<PathBuf> {
     check_pg_dump()?;
 
-    let db_name = crate::connection::parse_db_name(&options.database_url)
-        .unwrap_or_else(|| "unknown".into());
+    let db_name =
+        crate::connection::parse_db_name(&options.database_url).unwrap_or_else(|| "unknown".into());
 
     let filename = generate_filename(&options.filename_prefix, &db_name, &options.format);
     let output_path = options.output_dir.join(&filename);
@@ -197,11 +200,14 @@ pub fn run_dump(options: &DumpOptions, progress: &dyn ProgressSender) -> Result<
 /// Spawns `pg_dump` writing to a file on disk. Returns the child process and
 /// the output path so the caller can poll the file size for progress while
 /// pg_dump is still running.
-pub fn spawn_dump_to_file(options: &DumpOptions, progress: &dyn ProgressSender) -> Result<(std::process::Child, PathBuf)> {
+pub fn spawn_dump_to_file(
+    options: &DumpOptions,
+    progress: &dyn ProgressSender,
+) -> Result<(std::process::Child, PathBuf)> {
     check_pg_dump()?;
 
-    let db_name = crate::connection::parse_db_name(&options.database_url)
-        .unwrap_or_else(|| "unknown".into());
+    let db_name =
+        crate::connection::parse_db_name(&options.database_url).unwrap_or_else(|| "unknown".into());
 
     let filename = generate_filename(&options.filename_prefix, &db_name, &options.format);
     let output_path = options.output_dir.join(&filename);
@@ -260,7 +266,10 @@ pub fn spawn_dump_to_file(options: &DumpOptions, progress: &dyn ProgressSender) 
 /// NOTE: Directory format (`-Fd`) is not supported here because it writes
 /// to a directory, not stdout. The `-j` (parallel jobs) flag also requires
 /// directory format and is therefore ignored in streaming mode.
-pub fn spawn_dump_stream(options: &DumpOptions, progress: &dyn ProgressSender) -> Result<std::process::Child> {
+pub fn spawn_dump_stream(
+    options: &DumpOptions,
+    progress: &dyn ProgressSender,
+) -> Result<std::process::Child> {
     check_pg_dump()?;
 
     progress.send(ProgressEvent::PhaseStarted {

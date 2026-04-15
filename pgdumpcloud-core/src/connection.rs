@@ -36,7 +36,7 @@ pub async fn test_connection(url: &str) -> Result<ConnectionInfo> {
 }
 
 pub fn parse_db_name(url: &str) -> Option<String> {
-    url.rsplit('/').next().map(|s| {
-        s.split('?').next().unwrap_or(s).to_string()
-    })
+    url.rsplit('/')
+        .next()
+        .map(|s| s.split('?').next().unwrap_or(s).to_string())
 }

@@ -31,12 +31,29 @@ impl std::fmt::Display for Phase {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ProgressEvent {
-    PhaseStarted { phase: Phase },
-    Progress { phase: Phase, bytes: u64, total: Option<u64> },
-    PhaseCompleted { phase: Phase },
-    Error { message: String },
-    Finished { message: String },
-    TableProgress { schema: String, table: String, index: usize, total_tables: usize },
+    PhaseStarted {
+        phase: Phase,
+    },
+    Progress {
+        phase: Phase,
+        bytes: u64,
+        total: Option<u64>,
+    },
+    PhaseCompleted {
+        phase: Phase,
+    },
+    Error {
+        message: String,
+    },
+    Finished {
+        message: String,
+    },
+    TableProgress {
+        schema: String,
+        table: String,
+        index: usize,
+        total_tables: usize,
+    },
 }
 
 pub trait ProgressSender: Send + Sync {
@@ -51,7 +68,11 @@ impl ProgressSender for CliProgressSender {
             ProgressEvent::PhaseStarted { phase } => {
                 eprintln!("[INFO] {phase} started...");
             }
-            ProgressEvent::Progress { phase, bytes, total } => {
+            ProgressEvent::Progress {
+                phase,
+                bytes,
+                total,
+            } => {
                 if let Some(t) = total {
                     let pct = (*bytes as f64 / *t as f64 * 100.0) as u32;
                     eprint!("\r[INFO] {phase}: {bytes} / {t} bytes ({pct}%)    ");
@@ -68,8 +89,17 @@ impl ProgressSender for CliProgressSender {
             ProgressEvent::Finished { message } => {
                 eprintln!("[DONE] {message}");
             }
-            ProgressEvent::TableProgress { schema, table, index, total_tables } => {
-                eprintln!("[INFO] Exporting table {}/{}: {schema}.{table}", index + 1, total_tables);
+            ProgressEvent::TableProgress {
+                schema,
+                table,
+                index,
+                total_tables,
+            } => {
+                eprintln!(
+                    "[INFO] Exporting table {}/{}: {schema}.{table}",
+                    index + 1,
+                    total_tables
+                );
             }
         }
     }

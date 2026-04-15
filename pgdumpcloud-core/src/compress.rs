@@ -169,10 +169,7 @@ pub fn compress_gzip(
     Ok(output_path)
 }
 
-pub fn decompress_gzip(
-    input_path: &Path,
-    progress: &dyn ProgressSender,
-) -> Result<PathBuf> {
+pub fn decompress_gzip(input_path: &Path, progress: &dyn ProgressSender) -> Result<PathBuf> {
     let output_path = input_path.with_extension("");
 
     progress.send(ProgressEvent::PhaseStarted {

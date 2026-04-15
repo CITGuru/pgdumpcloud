@@ -135,7 +135,11 @@ pub struct ColumnInfo {
     pub data_type: String,
 }
 
-pub async fn list_datetime_columns(url: &str, schema: &str, table: &str) -> Result<Vec<ColumnInfo>> {
+pub async fn list_datetime_columns(
+    url: &str,
+    schema: &str,
+    table: &str,
+) -> Result<Vec<ColumnInfo>> {
     let client = connect(url).await?;
 
     let rows = client

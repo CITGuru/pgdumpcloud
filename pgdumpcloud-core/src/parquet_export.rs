@@ -86,8 +86,8 @@ pub async fn run_parquet_export(
         phase: Phase::Exporting,
     });
 
-    let db_name = connection::parse_db_name(&options.database_url)
-        .unwrap_or_else(|| "export".to_string());
+    let db_name =
+        connection::parse_db_name(&options.database_url).unwrap_or_else(|| "export".to_string());
 
     let client = introspect::connect(&options.database_url).await?;
 
@@ -117,7 +117,15 @@ pub async fn run_parquet_export(
 
         let (files, row_count, columns) = match &options.hive_partitioning {
             HivePartitioning::None => {
-                export_table_flat(&client, schema, table, &table_dir, max_rows, &options.fetch_strategy).await?
+                export_table_flat(
+                    &client,
+                    schema,
+                    table,
+                    &table_dir,
+                    max_rows,
+                    &options.fetch_strategy,
+                )
+                .await?
             }
             HivePartitioning::Year { column } => {
                 export_table_hive(&client, schema, table, &table_dir, column, false, max_rows)
@@ -427,32 +435,78 @@ fn build_column_array(
 
 fn row_to_string(row: &tokio_postgres::Row, col_idx: usize, pg_type: &str) -> Option<String> {
     match pg_type {
-        "bool" => row.try_get::<_, Option<bool>>(col_idx).ok().flatten().map(|v| v.to_string()),
-        "int2" => row.try_get::<_, Option<i16>>(col_idx).ok().flatten().map(|v| v.to_string()),
-        "int4" => row.try_get::<_, Option<i32>>(col_idx).ok().flatten().map(|v| v.to_string()),
-        "int8" => row.try_get::<_, Option<i64>>(col_idx).ok().flatten().map(|v| v.to_string()),
-        "float4" => row.try_get::<_, Option<f32>>(col_idx).ok().flatten().map(|v| v.to_string()),
-        "float8" => row.try_get::<_, Option<f64>>(col_idx).ok().flatten().map(|v| v.to_string()),
-        "oid" => row.try_get::<_, Option<u32>>(col_idx).ok().flatten().map(|v| v.to_string()),
-        "date" => row.try_get::<_, Option<NaiveDate>>(col_idx).ok().flatten().map(|v| v.to_string()),
-        "timestamp" => row.try_get::<_, Option<NaiveDateTime>>(col_idx).ok().flatten().map(|v| v.to_string()),
-        "timestamptz" => row.try_get::<_, Option<NaiveDateTime>>(col_idx).ok().flatten().map(|v| v.to_string()),
-        "json" | "jsonb" => row.try_get::<_, Option<serde_json::Value>>(col_idx).ok().flatten().map(|v| v.to_string()),
-        "bytea" => row.try_get::<_, Option<Vec<u8>>>(col_idx).ok().flatten().map(|v| {
-            v.iter().fold(String::with_capacity(v.len() * 2), |mut s, b| {
-                use std::fmt::Write;
-                let _ = write!(s, "{b:02x}");
-                s
-            })
-        }),
+        "bool" => row
+            .try_get::<_, Option<bool>>(col_idx)
+            .ok()
+            .flatten()
+            .map(|v| v.to_string()),
+        "int2" => row
+            .try_get::<_, Option<i16>>(col_idx)
+            .ok()
+            .flatten()
+            .map(|v| v.to_string()),
+        "int4" => row
+            .try_get::<_, Option<i32>>(col_idx)
+            .ok()
+            .flatten()
+            .map(|v| v.to_string()),
+        "int8" => row
+            .try_get::<_, Option<i64>>(col_idx)
+            .ok()
+            .flatten()
+            .map(|v| v.to_string()),
+        "float4" => row
+            .try_get::<_, Option<f32>>(col_idx)
+            .ok()
+            .flatten()
+            .map(|v| v.to_string()),
+        "float8" => row
+            .try_get::<_, Option<f64>>(col_idx)
+            .ok()
+            .flatten()
+            .map(|v| v.to_string()),
+        "oid" => row
+            .try_get::<_, Option<u32>>(col_idx)
+            .ok()
+            .flatten()
+            .map(|v| v.to_string()),
+        "date" => row
+            .try_get::<_, Option<NaiveDate>>(col_idx)
+            .ok()
+            .flatten()
+            .map(|v| v.to_string()),
+        "timestamp" => row
+            .try_get::<_, Option<NaiveDateTime>>(col_idx)
+            .ok()
+            .flatten()
+            .map(|v| v.to_string()),
+        "timestamptz" => row
+            .try_get::<_, Option<NaiveDateTime>>(col_idx)
+            .ok()
+            .flatten()
+            .map(|v| v.to_string()),
+        "json" | "jsonb" => row
+            .try_get::<_, Option<serde_json::Value>>(col_idx)
+            .ok()
+            .flatten()
+            .map(|v| v.to_string()),
+        "bytea" => row
+            .try_get::<_, Option<Vec<u8>>>(col_idx)
+            .ok()
+            .flatten()
+            .map(|v| {
+                v.iter()
+                    .fold(String::with_capacity(v.len() * 2), |mut s, b| {
+                        use std::fmt::Write;
+                        let _ = write!(s, "{b:02x}");
+                        s
+                    })
+            }),
         _ => row.try_get::<_, Option<String>>(col_idx).ok().flatten(),
     }
 }
 
-fn write_parquet_file(
-    path: &Path,
-    batch: &RecordBatch,
-) -> Result<()> {
+fn write_parquet_file(path: &Path, batch: &RecordBatch) -> Result<()> {
     let file = File::create(path)?;
     let props = WriterProperties::builder()
         .set_compression(Compression::ZSTD(Default::default()))
@@ -484,9 +538,7 @@ async fn fetch_cursor_to_parquet(
         .await
         .map_err(|e| PgDumpCloudError::ParquetExport(e.to_string()))?;
 
-    let declare = format!(
-        "DECLARE {cursor_name} NO SCROLL CURSOR FOR {cursor_query}"
-    );
+    let declare = format!("DECLARE {cursor_name} NO SCROLL CURSOR FOR {cursor_query}");
     client
         .batch_execute(&declare)
         .await
@@ -564,15 +616,15 @@ async fn copy_text_to_parquet(
     let max = max_rows as usize;
 
     while let Some(chunk_result) = stream.next().await {
-        let chunk = chunk_result
-            .map_err(|e| PgDumpCloudError::ParquetExport(e.to_string()))?;
+        let chunk = chunk_result.map_err(|e| PgDumpCloudError::ParquetExport(e.to_string()))?;
         buf.extend_from_slice(&chunk);
 
         let mut start = 0;
         while let Some(rel_pos) = buf[start..].iter().position(|&b| b == b'\n') {
             let end = start + rel_pos;
-            let line = std::str::from_utf8(&buf[start..end])
-                .map_err(|e| PgDumpCloudError::ParquetExport(format!("Invalid UTF-8 in COPY stream: {e}")))?;
+            let line = std::str::from_utf8(&buf[start..end]).map_err(|e| {
+                PgDumpCloudError::ParquetExport(format!("Invalid UTF-8 in COPY stream: {e}"))
+            })?;
 
             let fields: Vec<Option<String>> = line
                 .split('\t')
@@ -782,7 +834,11 @@ fn parse_text_column(
                         let hex_str = s.strip_prefix("\\x").unwrap_or(s);
                         let bytes: Vec<u8> = (0..hex_str.len())
                             .step_by(2)
-                            .filter_map(|i| hex_str.get(i..i + 2).and_then(|h| u8::from_str_radix(h, 16).ok()))
+                            .filter_map(|i| {
+                                hex_str
+                                    .get(i..i + 2)
+                                    .and_then(|h| u8::from_str_radix(h, 16).ok())
+                            })
                             .collect();
                         b.append_value(&bytes);
                     }
@@ -807,9 +863,17 @@ fn parse_text_column(
 /// Parse Postgres text-format timestamp, stripping any timezone suffix.
 fn parse_pg_timestamp(s: &str) -> Option<NaiveDateTime> {
     let base = if let Some(pos) = s.rfind('+') {
-        if pos > 10 { &s[..pos] } else { s }
+        if pos > 10 {
+            &s[..pos]
+        } else {
+            s
+        }
     } else if let Some(pos) = s.rfind('-') {
-        if pos > 10 { &s[..pos] } else { s }
+        if pos > 10 {
+            &s[..pos]
+        } else {
+            s
+        }
     } else {
         s
     };
@@ -826,21 +890,34 @@ async fn export_table_flat(
     max_rows: u64,
     strategy: &FetchStrategy,
 ) -> Result<(Vec<PathBuf>, u64, Vec<ManifestColumn>)> {
-    let (arrow_schema, pg_types, manifest_columns) = get_table_schema(client, schema, table).await?;
+    let (arrow_schema, pg_types, manifest_columns) =
+        get_table_schema(client, schema, table).await?;
 
     let quoted = format!("\"{}\".\"{}\"", schema, table);
     let (files, total_rows) = match strategy {
         FetchStrategy::Copy => {
             copy_text_to_parquet(
-                client, &quoted, output_dir, max_rows, &arrow_schema, &pg_types,
-            ).await?
+                client,
+                &quoted,
+                output_dir,
+                max_rows,
+                &arrow_schema,
+                &pg_types,
+            )
+            .await?
         }
         FetchStrategy::Cursor => {
             let cursor_query = format!("SELECT * FROM {quoted}");
             fetch_cursor_to_parquet(
-                client, "export_cur", &cursor_query, output_dir, max_rows,
-                &arrow_schema, &pg_types,
-            ).await?
+                client,
+                "export_cur",
+                &cursor_query,
+                output_dir,
+                max_rows,
+                &arrow_schema,
+                &pg_types,
+            )
+            .await?
         }
     };
 
@@ -856,7 +933,8 @@ async fn export_table_hive(
     include_month: bool,
     max_rows: u64,
 ) -> Result<(Vec<PathBuf>, u64, Vec<ManifestColumn>)> {
-    let (arrow_schema, pg_types, manifest_columns) = get_table_schema(client, schema, table).await?;
+    let (arrow_schema, pg_types, manifest_columns) =
+        get_table_schema(client, schema, table).await?;
 
     let quoted_table = format!("\"{}\".\"{}\"", schema, table);
     let quoted_col = format!("\"{}\"", column);
@@ -888,7 +966,9 @@ async fn export_table_hive(
         let year: i32 = prow.get(0);
         let (partition_dir, filter) = if include_month {
             let month: i32 = prow.get(1);
-            let dir = output_dir.join(format!("year={year}")).join(format!("month={month:02}"));
+            let dir = output_dir
+                .join(format!("year={year}"))
+                .join(format!("month={month:02}"));
             let filter = format!(
                 "EXTRACT(YEAR FROM {quoted_col})::int = {year} \
                  AND EXTRACT(MONTH FROM {quoted_col})::int = {month}"
@@ -904,16 +984,20 @@ async fn export_table_hive(
 
         let cursor_query = format!("SELECT * FROM {quoted_table} WHERE {filter}");
         let (files, row_count) = fetch_cursor_to_parquet(
-            client, "hive_cur", &cursor_query, &partition_dir, max_rows,
-            &arrow_schema, &pg_types,
-        ).await?;
+            client,
+            "hive_cur",
+            &cursor_query,
+            &partition_dir,
+            max_rows,
+            &arrow_schema,
+            &pg_types,
+        )
+        .await?;
         all_files.extend(files);
         total_row_count += row_count;
     }
 
-    let null_cursor_query = format!(
-        "SELECT * FROM {quoted_table} WHERE {quoted_col} IS NULL"
-    );
+    let null_cursor_query = format!("SELECT * FROM {quoted_table} WHERE {quoted_col} IS NULL");
 
     client
         .batch_execute("BEGIN")
@@ -939,9 +1023,15 @@ async fn export_table_hive(
         std::fs::create_dir_all(&null_dir)?;
 
         let (files, row_count) = fetch_cursor_to_parquet(
-            client, "null_cur", &null_cursor_query, &null_dir, max_rows,
-            &arrow_schema, &pg_types,
-        ).await?;
+            client,
+            "null_cur",
+            &null_cursor_query,
+            &null_dir,
+            max_rows,
+            &arrow_schema,
+            &pg_types,
+        )
+        .await?;
         all_files.extend(files);
         total_row_count += row_count;
     }
@@ -955,8 +1045,9 @@ fn write_manifest(base_dir: &Path, entries: &[ManifestEntry]) -> Result<()> {
         created_at: chrono::Utc::now().to_rfc3339(),
         tables: entries.to_vec(),
     };
-    let json = serde_json::to_string_pretty(&manifest)
-        .map_err(|e| PgDumpCloudError::ParquetExport(format!("Failed to serialize manifest: {e}")))?;
+    let json = serde_json::to_string_pretty(&manifest).map_err(|e| {
+        PgDumpCloudError::ParquetExport(format!("Failed to serialize manifest: {e}"))
+    })?;
     std::fs::write(base_dir.join("_manifest.json"), json)?;
     Ok(())
 }
@@ -967,14 +1058,11 @@ pub fn tar_gz_directory(dir: &Path) -> Result<PathBuf> {
     let gz = flate2::write::GzEncoder::new(file, flate2::Compression::default());
     let mut tar_builder = tar::Builder::new(gz);
 
-    let dir_name = dir
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("export");
+    let dir_name = dir.file_name().and_then(|n| n.to_str()).unwrap_or("export");
 
-    tar_builder
-        .append_dir_all(dir_name, dir)
-        .map_err(|e| PgDumpCloudError::ParquetExport(format!("Failed to create tar archive: {e}")))?;
+    tar_builder.append_dir_all(dir_name, dir).map_err(|e| {
+        PgDumpCloudError::ParquetExport(format!("Failed to create tar archive: {e}"))
+    })?;
     tar_builder
         .into_inner()
         .map_err(|e| PgDumpCloudError::ParquetExport(format!("Failed to finish tar: {e}")))?
