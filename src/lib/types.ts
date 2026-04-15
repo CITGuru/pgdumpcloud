@@ -67,6 +67,7 @@ export interface ColumnInfo {
 
 export type ParquetStorageMode = "archive" | "individual";
 export type HivePartitionKind = "none" | "year" | "year_month";
+export type FetchStrategy = "cursor" | "copy";
 
 export interface HivePartitioning {
   kind: HivePartitionKind;
@@ -77,6 +78,7 @@ export interface ParquetOptions {
   storage_mode: ParquetStorageMode;
   max_rows_per_file: number | null;
   hive_partitioning: HivePartitioning;
+  fetch_strategy: FetchStrategy;
 }
 
 export type Phase =

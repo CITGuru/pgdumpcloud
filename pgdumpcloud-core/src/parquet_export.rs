@@ -5,6 +5,7 @@ use crate::progress::{Phase, ProgressEvent, ProgressSender};
 use arrow::array::*;
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use chrono::{NaiveDate, NaiveDateTime};
+use futures_util::StreamExt;
 use parquet::arrow::ArrowWriter;
 use parquet::basic::Compression;
 use parquet::file::properties::WriterProperties;
@@ -15,7 +16,7 @@ use std::sync::Arc;
 
 const DEFAULT_MAX_ROWS: u64 = 500_000;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum StorageMode {
     Archive,
     Individual,
@@ -28,6 +29,12 @@ pub enum HivePartitioning {
     YearMonth { column: String },
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum FetchStrategy {
+    Cursor,
+    Copy,
+}
+
 pub struct ParquetExportOptions {
     pub database_url: String,
     pub schemas: Vec<String>,
@@ -37,6 +44,7 @@ pub struct ParquetExportOptions {
     pub max_rows_per_file: Option<u64>,
     pub hive_partitioning: HivePartitioning,
     pub storage_mode: StorageMode,
+    pub fetch_strategy: FetchStrategy,
 }
 
 pub struct ExportResult {
@@ -109,7 +117,7 @@ pub async fn run_parquet_export(
 
         let (files, row_count, columns) = match &options.hive_partitioning {
             HivePartitioning::None => {
-                export_table_flat(&client, schema, table, &table_dir, max_rows).await?
+                export_table_flat(&client, schema, table, &table_dir, max_rows, &options.fetch_strategy).await?
             }
             HivePartitioning::Year { column } => {
                 export_table_hive(&client, schema, table, &table_dir, column, false, max_rows)
@@ -460,39 +468,38 @@ fn write_parquet_file(
     Ok(())
 }
 
-async fn export_table_flat(
+/// Fetch rows via a server-side cursor and write Parquet part files into `output_dir`.
+/// Returns the list of files written and the total row count.
+async fn fetch_cursor_to_parquet(
     client: &tokio_postgres::Client,
-    schema: &str,
-    table: &str,
+    cursor_name: &str,
+    cursor_query: &str,
     output_dir: &Path,
     max_rows: u64,
-) -> Result<(Vec<PathBuf>, u64, Vec<ManifestColumn>)> {
-    let (arrow_schema, pg_types, manifest_columns) = get_table_schema(client, schema, table).await?;
-
-    let quoted = format!("\"{}\".\"{}\"", schema, table);
-    let count_row = client
-        .query_one(&format!("SELECT COUNT(*) FROM {quoted}"), &[])
+    arrow_schema: &Arc<Schema>,
+    pg_types: &[String],
+) -> Result<(Vec<PathBuf>, u64)> {
+    client
+        .batch_execute("BEGIN")
         .await
         .map_err(|e| PgDumpCloudError::ParquetExport(e.to_string()))?;
-    let total_rows: i64 = count_row.get(0);
 
-    if total_rows == 0 {
-        let path = output_dir.join("part-00000.parquet");
-        let batch = RecordBatch::new_empty(arrow_schema);
-        write_parquet_file(&path, &batch)?;
-        return Ok((vec![path], 0, manifest_columns));
-    }
+    let declare = format!(
+        "DECLARE {cursor_name} NO SCROLL CURSOR FOR {cursor_query}"
+    );
+    client
+        .batch_execute(&declare)
+        .await
+        .map_err(|e| PgDumpCloudError::ParquetExport(e.to_string()))?;
 
+    let fetch_sql = format!("FETCH {max_rows} FROM {cursor_name}");
     let mut files = Vec::new();
-    let mut offset: u64 = 0;
+    let mut total_rows: u64 = 0;
     let mut part_num: u32 = 0;
 
-    while offset < total_rows as u64 {
-        let query = format!(
-            "SELECT * FROM {quoted} LIMIT {max_rows} OFFSET {offset}"
-        );
+    loop {
         let rows = client
-            .query(&query, &[])
+            .query(&fetch_sql, &[])
             .await
             .map_err(|e| PgDumpCloudError::ParquetExport(e.to_string()))?;
 
@@ -500,16 +507,344 @@ async fn export_table_flat(
             break;
         }
 
-        let batch = rows_to_record_batch(&rows, &arrow_schema, &pg_types)?;
+        total_rows += rows.len() as u64;
+        let batch = rows_to_record_batch(&rows, arrow_schema, pg_types)?;
         let path = output_dir.join(format!("part-{part_num:05}.parquet"));
         write_parquet_file(&path, &batch)?;
         files.push(path);
-
-        offset += rows.len() as u64;
         part_num += 1;
     }
 
-    Ok((files, total_rows as u64, manifest_columns))
+    client
+        .batch_execute(&format!("CLOSE {cursor_name}"))
+        .await
+        .map_err(|e| PgDumpCloudError::ParquetExport(e.to_string()))?;
+    client
+        .batch_execute("ROLLBACK")
+        .await
+        .map_err(|e| PgDumpCloudError::ParquetExport(e.to_string()))?;
+
+    if files.is_empty() {
+        let path = output_dir.join("part-00000.parquet");
+        let batch = RecordBatch::new_empty(arrow_schema.clone());
+        write_parquet_file(&path, &batch)?;
+        files.push(path);
+    }
+
+    Ok((files, total_rows))
+}
+
+async fn copy_text_to_parquet(
+    client: &tokio_postgres::Client,
+    quoted_table: &str,
+    output_dir: &Path,
+    max_rows: u64,
+    arrow_schema: &Arc<Schema>,
+    pg_types: &[String],
+) -> Result<(Vec<PathBuf>, u64)> {
+    client
+        .batch_execute("SET timezone = 'UTC'")
+        .await
+        .map_err(|e| PgDumpCloudError::ParquetExport(e.to_string()))?;
+
+    let copy_query = format!("COPY {quoted_table} TO STDOUT (FORMAT text)");
+    let stream = client
+        .copy_out(copy_query.as_str())
+        .await
+        .map_err(|e| PgDumpCloudError::ParquetExport(e.to_string()))?;
+
+    tokio::pin!(stream);
+
+    let num_cols = arrow_schema.fields().len();
+    let mut buf = Vec::new();
+    let mut row_buf: Vec<Vec<Option<String>>> = Vec::new();
+    let mut files = Vec::new();
+    let mut total_rows: u64 = 0;
+    let mut part_num: u32 = 0;
+    let max = max_rows as usize;
+
+    while let Some(chunk_result) = stream.next().await {
+        let chunk = chunk_result
+            .map_err(|e| PgDumpCloudError::ParquetExport(e.to_string()))?;
+        buf.extend_from_slice(&chunk);
+
+        let mut start = 0;
+        while let Some(rel_pos) = buf[start..].iter().position(|&b| b == b'\n') {
+            let end = start + rel_pos;
+            let line = std::str::from_utf8(&buf[start..end])
+                .map_err(|e| PgDumpCloudError::ParquetExport(format!("Invalid UTF-8 in COPY stream: {e}")))?;
+
+            let fields: Vec<Option<String>> = line
+                .split('\t')
+                .take(num_cols)
+                .map(|f| {
+                    if f == "\\N" {
+                        None
+                    } else {
+                        Some(unescape_copy_text(f))
+                    }
+                })
+                .collect();
+            row_buf.push(fields);
+            start = end + 1;
+
+            if row_buf.len() >= max {
+                let batch = text_rows_to_record_batch(&row_buf, arrow_schema, pg_types)?;
+                let path = output_dir.join(format!("part-{part_num:05}.parquet"));
+                write_parquet_file(&path, &batch)?;
+                files.push(path);
+                total_rows += row_buf.len() as u64;
+                row_buf.clear();
+                part_num += 1;
+            }
+        }
+
+        if start > 0 {
+            buf.drain(..start);
+        }
+    }
+
+    if !row_buf.is_empty() {
+        let batch = text_rows_to_record_batch(&row_buf, arrow_schema, pg_types)?;
+        let path = output_dir.join(format!("part-{part_num:05}.parquet"));
+        write_parquet_file(&path, &batch)?;
+        files.push(path);
+        total_rows += row_buf.len() as u64;
+    }
+
+    if files.is_empty() {
+        let path = output_dir.join("part-00000.parquet");
+        let batch = RecordBatch::new_empty(arrow_schema.clone());
+        write_parquet_file(&path, &batch)?;
+        files.push(path);
+    }
+
+    Ok((files, total_rows))
+}
+
+fn unescape_copy_text(s: &str) -> String {
+    if !s.contains('\\') {
+        return s.to_string();
+    }
+    let mut result = String::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            match chars.next() {
+                Some('n') => result.push('\n'),
+                Some('t') => result.push('\t'),
+                Some('r') => result.push('\r'),
+                Some('\\') => result.push('\\'),
+                Some(other) => {
+                    result.push('\\');
+                    result.push(other);
+                }
+                None => result.push('\\'),
+            }
+        } else {
+            result.push(c);
+        }
+    }
+    result
+}
+
+fn text_rows_to_record_batch(
+    rows: &[Vec<Option<String>>],
+    arrow_schema: &Arc<Schema>,
+    pg_types: &[String],
+) -> Result<RecordBatch> {
+    let num_cols = arrow_schema.fields().len();
+    let mut columns: Vec<ArrayRef> = Vec::with_capacity(num_cols);
+
+    for col_idx in 0..num_cols {
+        let field = arrow_schema.field(col_idx);
+        let pg_type = &pg_types[col_idx];
+        let col_values: Vec<Option<&str>> = rows
+            .iter()
+            .map(|row| row.get(col_idx).and_then(|v| v.as_deref()))
+            .collect();
+        let array = parse_text_column(&col_values, field.data_type(), pg_type)?;
+        columns.push(array);
+    }
+
+    RecordBatch::try_new(arrow_schema.clone(), columns)
+        .map_err(|e| PgDumpCloudError::ParquetExport(format!("Failed to create RecordBatch: {e}")))
+}
+
+fn parse_text_column(
+    values: &[Option<&str>],
+    data_type: &DataType,
+    _pg_type: &str,
+) -> Result<ArrayRef> {
+    match data_type {
+        DataType::Boolean => {
+            let mut b = BooleanBuilder::with_capacity(values.len());
+            for v in values {
+                match v {
+                    Some("t") => b.append_value(true),
+                    Some("f") => b.append_value(false),
+                    _ => b.append_null(),
+                }
+            }
+            Ok(Arc::new(b.finish()))
+        }
+        DataType::Int16 => {
+            let mut b = Int16Builder::with_capacity(values.len());
+            for v in values {
+                match v.and_then(|s| s.parse::<i16>().ok()) {
+                    Some(n) => b.append_value(n),
+                    None => b.append_null(),
+                }
+            }
+            Ok(Arc::new(b.finish()))
+        }
+        DataType::Int32 => {
+            let mut b = Int32Builder::with_capacity(values.len());
+            for v in values {
+                match v.and_then(|s| s.parse::<i32>().ok()) {
+                    Some(n) => b.append_value(n),
+                    None => b.append_null(),
+                }
+            }
+            Ok(Arc::new(b.finish()))
+        }
+        DataType::Int64 => {
+            let mut b = Int64Builder::with_capacity(values.len());
+            for v in values {
+                match v.and_then(|s| s.parse::<i64>().ok()) {
+                    Some(n) => b.append_value(n),
+                    None => b.append_null(),
+                }
+            }
+            Ok(Arc::new(b.finish()))
+        }
+        DataType::UInt32 => {
+            let mut b = UInt32Builder::with_capacity(values.len());
+            for v in values {
+                match v.and_then(|s| s.parse::<u32>().ok()) {
+                    Some(n) => b.append_value(n),
+                    None => b.append_null(),
+                }
+            }
+            Ok(Arc::new(b.finish()))
+        }
+        DataType::Float32 => {
+            let mut b = Float32Builder::with_capacity(values.len());
+            for v in values {
+                match v.and_then(|s| s.parse::<f32>().ok()) {
+                    Some(n) => b.append_value(n),
+                    None => b.append_null(),
+                }
+            }
+            Ok(Arc::new(b.finish()))
+        }
+        DataType::Float64 => {
+            let mut b = Float64Builder::with_capacity(values.len());
+            for v in values {
+                match v.and_then(|s| s.parse::<f64>().ok()) {
+                    Some(n) => b.append_value(n),
+                    None => b.append_null(),
+                }
+            }
+            Ok(Arc::new(b.finish()))
+        }
+        DataType::Date32 => {
+            let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
+            let mut b = Date32Builder::with_capacity(values.len());
+            for v in values {
+                match v.and_then(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok()) {
+                    Some(d) => b.append_value((d - epoch).num_days() as i32),
+                    None => b.append_null(),
+                }
+            }
+            Ok(Arc::new(b.finish()))
+        }
+        DataType::Timestamp(TimeUnit::Microsecond, tz) => {
+            let mut b = TimestampMicrosecondBuilder::with_capacity(values.len());
+            for v in values {
+                match v.and_then(|s| parse_pg_timestamp(s)) {
+                    Some(ts) => b.append_value(ts.and_utc().timestamp_micros()),
+                    None => b.append_null(),
+                }
+            }
+            let arr = b.finish();
+            if tz.is_some() {
+                Ok(Arc::new(arr.with_timezone("UTC")))
+            } else {
+                Ok(Arc::new(arr))
+            }
+        }
+        DataType::Binary => {
+            let mut b = BinaryBuilder::with_capacity(values.len(), 256);
+            for v in values {
+                match v {
+                    Some(s) => {
+                        let hex_str = s.strip_prefix("\\x").unwrap_or(s);
+                        let bytes: Vec<u8> = (0..hex_str.len())
+                            .step_by(2)
+                            .filter_map(|i| hex_str.get(i..i + 2).and_then(|h| u8::from_str_radix(h, 16).ok()))
+                            .collect();
+                        b.append_value(&bytes);
+                    }
+                    None => b.append_null(),
+                }
+            }
+            Ok(Arc::new(b.finish()))
+        }
+        _ => {
+            let mut b = StringBuilder::with_capacity(values.len(), 64);
+            for v in values {
+                match v {
+                    Some(s) => b.append_value(s),
+                    None => b.append_null(),
+                }
+            }
+            Ok(Arc::new(b.finish()))
+        }
+    }
+}
+
+/// Parse Postgres text-format timestamp, stripping any timezone suffix.
+fn parse_pg_timestamp(s: &str) -> Option<NaiveDateTime> {
+    let base = if let Some(pos) = s.rfind('+') {
+        if pos > 10 { &s[..pos] } else { s }
+    } else if let Some(pos) = s.rfind('-') {
+        if pos > 10 { &s[..pos] } else { s }
+    } else {
+        s
+    };
+    NaiveDateTime::parse_from_str(base, "%Y-%m-%d %H:%M:%S%.f")
+        .ok()
+        .or_else(|| NaiveDateTime::parse_from_str(base, "%Y-%m-%d %H:%M:%S").ok())
+}
+
+async fn export_table_flat(
+    client: &tokio_postgres::Client,
+    schema: &str,
+    table: &str,
+    output_dir: &Path,
+    max_rows: u64,
+    strategy: &FetchStrategy,
+) -> Result<(Vec<PathBuf>, u64, Vec<ManifestColumn>)> {
+    let (arrow_schema, pg_types, manifest_columns) = get_table_schema(client, schema, table).await?;
+
+    let quoted = format!("\"{}\".\"{}\"", schema, table);
+    let (files, total_rows) = match strategy {
+        FetchStrategy::Copy => {
+            copy_text_to_parquet(
+                client, &quoted, output_dir, max_rows, &arrow_schema, &pg_types,
+            ).await?
+        }
+        FetchStrategy::Cursor => {
+            let cursor_query = format!("SELECT * FROM {quoted}");
+            fetch_cursor_to_parquet(
+                client, "export_cur", &cursor_query, output_dir, max_rows,
+                &arrow_schema, &pg_types,
+            ).await?
+        }
+    };
+
+    Ok((files, total_rows, manifest_columns))
 }
 
 async fn export_table_hive(
@@ -567,79 +902,48 @@ async fn export_table_hive(
 
         std::fs::create_dir_all(&partition_dir)?;
 
-        let count_query = format!("SELECT COUNT(*) FROM {quoted_table} WHERE {filter}");
-        let count_row = client
-            .query_one(&count_query, &[])
-            .await
-            .map_err(|e| PgDumpCloudError::ParquetExport(e.to_string()))?;
-        let partition_count: i64 = count_row.get(0);
-        total_row_count += partition_count as u64;
-
-        let mut offset: u64 = 0;
-        let mut part_num: u32 = 0;
-
-        while offset < partition_count as u64 {
-            let query = format!(
-                "SELECT * FROM {quoted_table} WHERE {filter} LIMIT {max_rows} OFFSET {offset}"
-            );
-            let rows = client
-                .query(&query, &[])
-                .await
-                .map_err(|e| PgDumpCloudError::ParquetExport(e.to_string()))?;
-
-            if rows.is_empty() {
-                break;
-            }
-
-            let batch = rows_to_record_batch(&rows, &arrow_schema, &pg_types)?;
-            let path = partition_dir.join(format!("part-{part_num:05}.parquet"));
-            write_parquet_file(&path, &batch)?;
-            all_files.push(path);
-
-            offset += rows.len() as u64;
-            part_num += 1;
-        }
+        let cursor_query = format!("SELECT * FROM {quoted_table} WHERE {filter}");
+        let (files, row_count) = fetch_cursor_to_parquet(
+            client, "hive_cur", &cursor_query, &partition_dir, max_rows,
+            &arrow_schema, &pg_types,
+        ).await?;
+        all_files.extend(files);
+        total_row_count += row_count;
     }
 
-    // Handle NULL partition values
-    let null_count_query =
-        format!("SELECT COUNT(*) FROM {quoted_table} WHERE {quoted_col} IS NULL");
-    let null_count_row = client
-        .query_one(&null_count_query, &[])
+    let null_cursor_query = format!(
+        "SELECT * FROM {quoted_table} WHERE {quoted_col} IS NULL"
+    );
+
+    client
+        .batch_execute("BEGIN")
         .await
         .map_err(|e| PgDumpCloudError::ParquetExport(e.to_string()))?;
-    let null_count: i64 = null_count_row.get(0);
+    client
+        .batch_execute(&format!(
+            "DECLARE null_check_cur NO SCROLL CURSOR FOR {null_cursor_query}"
+        ))
+        .await
+        .map_err(|e| PgDumpCloudError::ParquetExport(e.to_string()))?;
+    let peek = client
+        .query("FETCH 1 FROM null_check_cur", &[])
+        .await
+        .map_err(|e| PgDumpCloudError::ParquetExport(e.to_string()))?;
+    client
+        .batch_execute("CLOSE null_check_cur; ROLLBACK")
+        .await
+        .map_err(|e| PgDumpCloudError::ParquetExport(e.to_string()))?;
 
-    if null_count > 0 {
+    if !peek.is_empty() {
         let null_dir = output_dir.join("__HIVE_DEFAULT_PARTITION__");
         std::fs::create_dir_all(&null_dir)?;
-        total_row_count += null_count as u64;
 
-        let mut offset: u64 = 0;
-        let mut part_num: u32 = 0;
-
-        while offset < null_count as u64 {
-            let query = format!(
-                "SELECT * FROM {quoted_table} WHERE {quoted_col} IS NULL \
-                 LIMIT {max_rows} OFFSET {offset}"
-            );
-            let rows = client
-                .query(&query, &[])
-                .await
-                .map_err(|e| PgDumpCloudError::ParquetExport(e.to_string()))?;
-
-            if rows.is_empty() {
-                break;
-            }
-
-            let batch = rows_to_record_batch(&rows, &arrow_schema, &pg_types)?;
-            let path = null_dir.join(format!("part-{part_num:05}.parquet"));
-            write_parquet_file(&path, &batch)?;
-            all_files.push(path);
-
-            offset += rows.len() as u64;
-            part_num += 1;
-        }
+        let (files, row_count) = fetch_cursor_to_parquet(
+            client, "null_cur", &null_cursor_query, &null_dir, max_rows,
+            &arrow_schema, &pg_types,
+        ).await?;
+        all_files.extend(files);
+        total_row_count += row_count;
     }
 
     Ok((all_files, total_row_count, manifest_columns))

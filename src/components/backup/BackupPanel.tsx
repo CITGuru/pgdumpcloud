@@ -54,6 +54,7 @@ export function BackupPanel({
       storage_mode: "archive",
       max_rows_per_file: null,
       hive_partitioning: { kind: "none" },
+      fetch_strategy: "cursor",
     },
   });
 

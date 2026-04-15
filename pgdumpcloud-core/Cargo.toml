@@ -39,5 +39,6 @@ dirs = "6"
 chrono = { version = "0.4", features = ["serde"] }
 async-trait = "0.1"
 tokio-util = "0.7"
+futures-util = "0.3"
 url = "2"
 urlencoding = "2"

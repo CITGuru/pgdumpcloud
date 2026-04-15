@@ -3,7 +3,7 @@ use std::sync::Arc;
 use pgdumpcloud_core::compress;
 use pgdumpcloud_core::dump::{self, DumpFormat, DumpOptions};
 use pgdumpcloud_core::introspect;
-use pgdumpcloud_core::parquet_export::{self, ParquetExportOptions, StorageMode, HivePartitioning as CoreHivePartitioning};
+use pgdumpcloud_core::parquet_export::{self, FetchStrategy, ParquetExportOptions, StorageMode, HivePartitioning as CoreHivePartitioning};
 use pgdumpcloud_core::progress::{Phase, ProgressEvent, ProgressSender, ThrottledProgressSender};
 use pgdumpcloud_core::restore::{self, RestoreOptions};
 use pgdumpcloud_core::storage::s3::S3Storage;
@@ -330,6 +330,11 @@ async fn run_parquet_backup(
         super::backup::HivePartitioning::None => CoreHivePartitioning::None,
     };
 
+    let fetch_strategy = match parquet_opts.fetch_strategy.as_str() {
+        "copy" => FetchStrategy::Copy,
+        _ => FetchStrategy::Cursor,
+    };
+
     let export_opts = ParquetExportOptions {
         database_url: request.connection_url,
         schemas: request.schemas,
@@ -339,6 +344,7 @@ async fn run_parquet_backup(
         max_rows_per_file: parquet_opts.max_rows_per_file,
         hive_partitioning: hive,
         storage_mode,
+        fetch_strategy,
     };
 
     if cancel.is_cancelled() { return; }

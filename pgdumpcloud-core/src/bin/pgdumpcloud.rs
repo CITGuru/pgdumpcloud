@@ -91,6 +91,9 @@ enum Commands {
 
         #[arg(long, help = "Column name for Hive partitioning (required when partition-by != none)")]
         partition_column: Option<String>,
+
+        #[arg(long, default_value = "cursor", help = "Fetch strategy for flat export (cursor or copy)")]
+        fetch_strategy: FetchStrategyArg,
     },
 
     /// Restore a backup from cloud storage
@@ -191,6 +194,12 @@ enum PartitionByArg {
     None,
     Year,
     YearMonth,
+}
+
+#[derive(Clone, ValueEnum)]
+enum FetchStrategyArg {
+    Cursor,
+    Copy,
 }
 
 #[derive(Clone, ValueEnum)]
@@ -303,6 +312,7 @@ async fn main() {
             max_rows_per_file,
             partition_by,
             partition_column,
+            fetch_strategy,
         } => {
             let db_url = resolve_db_url(&url, &conn, &cfg);
             let s3 = resolve_s3_storage(
@@ -320,6 +330,7 @@ async fn main() {
                     &db_url, schemas, tables, &filename_prefix,
                     output_dir.unwrap_or_else(std::env::temp_dir),
                     storage_mode, max_rows_per_file, partition_by, partition_column,
+                    fetch_strategy,
                     keep_local, retention, s3, &progress_sender,
                 ).await;
                 return;
@@ -744,6 +755,7 @@ async fn run_parquet_backup_cli(
     max_rows_per_file: Option<u64>,
     partition_by: PartitionByArg,
     partition_column: Option<String>,
+    fetch_strategy: FetchStrategyArg,
     keep_local: bool,
     retention: u32,
     s3: storage::s3::S3Storage,
@@ -752,6 +764,11 @@ async fn run_parquet_backup_cli(
     let mode = match storage_mode {
         StorageModeArg::Archive => parquet_export::StorageMode::Archive,
         StorageModeArg::Individual => parquet_export::StorageMode::Individual,
+    };
+
+    let strategy = match fetch_strategy {
+        FetchStrategyArg::Copy => parquet_export::FetchStrategy::Copy,
+        FetchStrategyArg::Cursor => parquet_export::FetchStrategy::Cursor,
     };
 
     let hive = match partition_by {
@@ -781,6 +798,7 @@ async fn run_parquet_backup_cli(
         max_rows_per_file,
         hive_partitioning: hive,
         storage_mode: mode,
+        fetch_strategy: strategy,
     };
 
     let result = match parquet_export::run_parquet_export(&opts, progress_sender).await {

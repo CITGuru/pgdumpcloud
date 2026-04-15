@@ -15,6 +15,7 @@ import type {
   HivePartitionKind,
   HivePartitioning,
   ParquetOptions,
+  FetchStrategy,
   ColumnInfo,
 } from "@/lib/types";
 import { api } from "@/lib/tauri";
@@ -197,6 +198,26 @@ export function BackupOptions({
               />
             </div>
           </div>
+          {hiveKind === "none" && (
+            <div className="space-y-1.5">
+              <Label className="text-xs">Fetch Strategy</Label>
+              <Select
+                value={pq.fetch_strategy}
+                onValueChange={(v) => setPq({ fetch_strategy: v as FetchStrategy })}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="cursor">Server Cursor</SelectItem>
+                  <SelectItem value="copy">COPY Stream</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-[10px] text-muted-foreground">
+                COPY is faster on large tables; Cursor is the safe default.
+              </p>
+            </div>
+          )}
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
               <Label className="text-xs">Hive Partitioning</Label>

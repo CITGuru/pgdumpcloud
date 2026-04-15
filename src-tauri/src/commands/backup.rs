@@ -38,6 +38,12 @@ pub struct ParquetOptions {
     pub storage_mode: String,
     pub max_rows_per_file: Option<u64>,
     pub hive_partitioning: HivePartitioning,
+    #[serde(default = "default_fetch_strategy")]
+    pub fetch_strategy: String,
+}
+
+fn default_fetch_strategy() -> String {
+    "cursor".into()
 }
 
 impl Default for ParquetOptions {
@@ -46,6 +52,7 @@ impl Default for ParquetOptions {
             storage_mode: "archive".into(),
             max_rows_per_file: None,
             hive_partitioning: HivePartitioning::None,
+            fetch_strategy: "cursor".into(),
         }
     }
 }
